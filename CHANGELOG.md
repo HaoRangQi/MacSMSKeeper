@@ -23,9 +23,11 @@
 
 ### 修复
 
-- 删除时报 `no such function: after_delete_message_plugin`：「信息」App 会向
-  chat.db 注册私有 SQL 函数，库内触发器删除时调用它们。现在写连接会自动扫描
-  触发器并注册这些函数的空实现，删除不再失败。
+- 删除时报 `no such function: after_delete_message_plugin` /
+  `before_delete_attachment_path` 等：「信息」App 会向 chat.db 注册私有 SQL
+  函数，库内触发器增删消息时调用它们。现在写连接会扫描全部触发器，把其中
+  调用的函数逐个探测（`SELECT name()`），SQLite 里不存在的才注册空实现。
+  内置函数会被探测识别、绝不覆盖。该方案不依赖命名规律。
 - 删除失败时错误信息丢失 SQLite 原文（只显示「删除消息失败」），现在会带出
   真实原因；`database is locked` / 只读等常见错误也给了可操作提示。
 

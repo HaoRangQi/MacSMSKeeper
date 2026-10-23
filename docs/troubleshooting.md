@@ -24,21 +24,27 @@
 
 ## 已知问题与修复
 
-### `no such function: after_delete_message_plugin`
+### `no such function: xxx`
 
-**现象**：点删除后弹窗「数据库错误：no such function: after_delete_message_plugin」。
+**现象**：点删除或还原后弹窗「数据库错误：no such function: xxx」，
+xxx 可能是 `after_delete_message_plugin`、`before_delete_attachment_path`
+等你没见过的名字。
 
 **原因**：macOS 的「信息」App 打开 `chat.db` 时，会用 `sqlite3_create_function`
-注册一批私有 SQL 函数；库里的触发器（`after_delete_message` 等）在增删消息时
-调用它们。我们的程序自己打开数据库，连接上没有这些函数，`DELETE` 就失败了。
-用 `sqlite3` 命令行直接删也会报同样的错——这不是本工具的问题，是 chat.db 的结构。
+注册一批私有 SQL 函数；库里的触发器在增删消息时调用它们。我们的程序自己打开
+数据库，连接上没有这些函数，写操作就失败了。用 `sqlite3` 命令行直接删也会报
+同样的错——这不是本工具的问题，是 chat.db 的结构决定的。
 
-**修复**：写连接建立时，扫描 `sqlite_master` 里全部触发器，提取出引用的
-`*_plugin` 函数名，连同内置的 6 个已知函数一起，注册成空实现。触发器因此能正常
-走完。删除前仍会退出「信息」App 并做整库备份，所以跳过这些函数是安全的。
+**修复**：写连接建立时，扫描 `sqlite_master` 里全部触发器，把其中调用的函数名
+逐个探测（`SELECT name()`），SQLite 里不存在的才注册成空实现。内置函数会被探测
+识别、绝不覆盖。触发器因此能正常走完。删除前仍会退出「信息」App 并做整库备份，
+所以跳过这些私有函数是安全的。
 
-**如果日志里出现别的函数名**（比如系统升级后新增的），把日志发给开发者，
-在 `Sources/Core/Database.swift` 的 `knownPluginFuncs` 里加一行即可。
+这个方案不依赖命名规律——`*_plugin`、`before_delete_*`、乃至完全没见过的名字
+都能覆盖，系统升级后新增函数也不用改代码。
+
+**理论上**：如果 macOS 把函数调用藏在触发器以外的地方（视图、CHECK 约束、
+生成的列），扫描会漏掉。真遇到就把日志发来，那是新情况。
 
 ### `database is locked`
 

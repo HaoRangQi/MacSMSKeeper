@@ -54,33 +54,96 @@ final class SQLiteDB {
     // MARK: macOS 私有 SQL 函数的兼容
 
     /// 「信息」App 打开 chat.db 时会用 sqlite3_create_function 注册一批私有函数，
-    /// 库里的触发器在增删消息时调用它们（例如 after_delete_message_plugin）。
-    /// 我们的连接没有这些函数，DELETE 就会失败：
+    /// 库里的触发器在增删消息时调用它们。我们的连接没有这些函数，
+    /// DELETE / INSERT 就会失败，例如：
     ///     no such function: after_delete_message_plugin
-    /// 解决办法是注册同名的空实现，让触发器正常走完。
-    /// 这些函数在「信息」App 内部大概是维护索引/缓存，App 已退出的情况下跳过无副作用。
-    private static let knownPluginFuncs = [
+    ///     no such function: before_delete_attachment_path
+    ///
+    /// 命名规律没有统一格式（*_plugin、before_delete_* 都见过），所以不靠猜：
+    /// 扫描全部触发器，把其中调用的函数名逐个探测，SQLite 里不存在的才注册空实现。
+    /// 已存在的（内置函数）绝不动，避免覆盖真实行为。
+    ///
+    /// 这些私有函数在「信息」App 内部大概是维护索引/缓存，
+    /// 而我们要求「信息」App 退出后才写库，跳过它们无副作用。
+
+    /// 已知的私有函数名。扫描是主路径，这里只是兜底
+    /// （万一触发器不在 sqlite_master 里，或命名被混淆）。
+    private static let knownPrivateFuncs = [
         "after_delete_message_plugin",
         "after_insert_message_plugin",
         "after_update_message_plugin",
         "before_delete_message_plugin",
         "before_insert_message_plugin",
         "before_update_message_plugin",
+        "before_delete_attachment_path",
+        "after_delete_attachment_path",
+        "before_insert_attachment_path",
+        "after_insert_attachment_path",
     ]
 
-    /// 从触发器 SQL 里提取形如 xxx_plugin( 的函数名。
-    /// 动态扫描比硬编码更稳：将来 macOS 改了函数名也能覆盖。
-    private static func pluginFuncs(in sql: String) -> [String] {
+    /// SQLite 内置函数。命中就跳过，不做探测也不注册。
+    /// 探测本身已经能识别内置函数，这份清单只是省掉无用的 prepare。
+    private static let builtinFuncs: Set<String> = [
+        // 核心
+        "abs","changes","char","coalesce","concat","concat_ws","format","glob",
+        "hex","ifnull","iif","instr","last_insert_rowid","length","like",
+        "likelihood","likely","load_extension","lower","ltrim","max","min",
+        "nullif","octet_length","printf","quote","random","randomblob","replace",
+        "round","rtrim","sign","soundex","sqlite_compileoption_get",
+        "sqlite_compileoption_used","sqlite_offset","sqlite_source_id",
+        "sqlite_version","substr","substring","total_changes","trim","typeof",
+        "unhex","unicode","unlikely","upper","zeroblob",
+        // 数学（需 SQLITE_ENABLE_MATH_FUNCTIONS）
+        "acos","acosh","asin","asinh","atan","atan2","atanh","ceil","ceiling",
+        "cos","cosh","degrees","exp","floor","ln","log","log10","log2","mod",
+        "pi","pow","power","radians","sin","sinh","sqrt","tan","tanh","trunc",
+        // 日期时间
+        "date","time","datetime","julianday","unixepoch","strftime","timediff",
+        // 聚合与窗口
+        "avg","count","group_concat","sum","total","string_agg",
+        "row_number","rank","dense_rank","percent_rank","cume_dist","ntile",
+        "lag","lead","first_value","last_value","nth_value",
+        // JSON
+        "json","json_array","json_array_length","json_each","json_extract",
+        "json_group_array","json_group_object","json_insert","json_object",
+        "json_patch","json_quote","json_remove","json_replace","json_set",
+        "json_tree","json_type","json_valid","json_error_position",
+        // SQL 语法里会跟着括号的关键字，避免误当函数
+        "values","cast","exists","in","not","and","or","case","when","then",
+        "raise","collate","filter","over","partition","current_date",
+        "current_time","current_timestamp",
+    ]
+
+    /// 从 SQL 里提取所有「标识符(」形式的函数调用名
+    private static func calledFuncs(in sql: String) -> [String] {
         var out: [String] = []
-        var search = sql
-        let pattern = #"([A-Za-z_][A-Za-z0-9_]*_plugin)\s*\("#
-        while let r = search.range(of: pattern, options: .regularExpression) {
-            let name = String(search[r]).replacingOccurrences(of: "(", with: "")
+        var rest = sql
+        let pattern = #"([A-Za-z_][A-Za-z0-9_]*)\s*\("#
+        while let r = rest.range(of: pattern, options: .regularExpression) {
+            let name = String(rest[r])
+                .replacingOccurrences(of: "(", with: "")
                 .trimmingCharacters(in: .whitespaces)
-            if !out.contains(name) { out.append(name) }
-            search = String(search[r.upperBound...])
+            if !builtinFuncs.contains(name.lowercased()), !out.contains(name) {
+                out.append(name)
+            }
+            rest = String(rest[r.upperBound...])
         }
         return out
+    }
+
+    /// 探测某个函数名在当前连接上是否已存在。
+    /// 做法是尝试 prepare 一条 `SELECT name()`：
+    ///   - prepare 成功            → 存在
+    ///   - 报错但不是 no such function（如参数个数不匹配）→ 也存在
+    ///   - 报 no such function      → 不存在，需要注册
+    private func funcExists(_ name: String) -> Bool {
+        guard let h = handle else { return true }
+        var stmt: OpaquePointer?
+        let rc = sqlite3_prepare_v2(h, "SELECT \(name)()", -1, &stmt, nil)
+        defer { sqlite3_finalize(stmt) }
+        if rc == SQLITE_OK { return true }
+        let msg = String(cString: sqlite3_errmsg(h))
+        return !msg.contains("no such function")
     }
 
     /// 给连接注册所有私有函数的空实现，返回实际注册的名字（供日志记录）
@@ -88,21 +151,23 @@ final class SQLiteDB {
     func registerPluginShims() -> [String] {
         guard let h = handle else { return [] }
 
-        var names = Set<String>(Self.knownPluginFuncs)
+        var candidates = Set<String>(Self.knownPrivateFuncs)
 
-        // 扫描库里全部触发器，动态补充
+        // 扫描全部触发器，收集其中调用的函数名
         if let stmt = try? prepare("SELECT sql FROM sqlite_master WHERE type='trigger'") {
             defer { sqlite3_finalize(stmt) }
             while sqlite3_step(stmt) == SQLITE_ROW {
                 if let c = sqlite3_column_text(stmt, 0) {
                     let sql = String(cString: c)
-                    names.formUnion(Self.pluginFuncs(in: sql))
+                    candidates.formUnion(Self.calledFuncs(in: sql))
                 }
             }
         }
 
         var registered: [String] = []
-        for name in names.sorted() {
+        for name in candidates.sorted() {
+            // 只补 SQLite 里没有的，绝不覆盖内置函数
+            if funcExists(name) { continue }
             // nArg = -1 表示任意参数个数
             let rc = sqlite3_create_function(h, name, -1, SQLITE_UTF8, nil,
                                              noopSQLFunc, nil, nil)
