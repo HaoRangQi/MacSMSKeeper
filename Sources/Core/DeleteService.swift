@@ -18,6 +18,42 @@ struct TrashRow: Codable {
     var chats: [Int64]
 }
 
+/// 被清空的会话行。删除时不只删 message，chat 表里的会话记录也要删
+/// （否则「信息」App 列表里留一个点进去空白的对话）。
+/// 为了让还原能把会话找回来，这里按通用方式存下整行。
+struct DeletedChat: Codable {
+    var rowid: Int64
+    var columns: [String]
+    var values: [CellValue]
+}
+
+/// SQLite 单元格值的通用表示，避免依赖具体表结构
+enum CellValue: Codable {
+    case int(Int64)
+    case text(String)
+    case blob(String)      // base64
+    case real(Double)
+    case null
+
+    func bind(_ stmt: OpaquePointer, _ idx: Int32) {
+        switch self {
+        case .int(let v):  sqlite3_bind_int64(stmt, idx, v)
+        case .text(let v): sqlite3_bind_text(stmt, idx, v, -1, SQLITE_TRANSIENT)
+        case .real(let v): sqlite3_bind_double(stmt, idx, v)
+        case .blob(let b64):
+            if let d = Data(base64Encoded: b64) {
+                _ = d.withUnsafeBytes { buf in
+                    sqlite3_bind_blob(stmt, idx, buf.baseAddress,
+                                      Int32(d.count), SQLITE_TRANSIENT)
+                }
+            } else {
+                sqlite3_bind_null(stmt, idx)
+            }
+        case .null: sqlite3_bind_null(stmt, idx)
+        }
+    }
+}
+
 struct TrashBatch: Codable, Identifiable {
     var id: String
     var time: String
@@ -26,6 +62,8 @@ struct TrashBatch: Codable, Identifiable {
     var ruleName: String?
     var isDemo: Bool
     var rows: [TrashRow]
+    /// 本次删除连带清掉的会话行（旧版本存档没有此字段，用可选保证兼容）
+    var deletedChats: [DeletedChat]? = nil
 }
 
 struct BackupFile: Identifiable {
@@ -117,6 +155,17 @@ final class DeleteService {
     static let shared = DeleteService()
 
     private let fm = FileManager.default
+
+    /// 回收站批次序号，保证同一毫秒内的多次删除也不会重名
+    private var batchSeq = 0
+
+    /// 毫秒精度时间戳，用于回收站批次 ID
+    private static let stampMs: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyyMMdd-HHmmss-SSS"
+        f.locale = Locale(identifier: "en_US_POSIX")
+        return f
+    }()
 
     var supportDir: URL {
         let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -241,6 +290,9 @@ final class DeleteService {
         let backup = try createBackup(tag: "before-delete")
         Log.event("delete.backup", "name", backup.name, "mb", "\(backup.sizeMB)")
 
+        // 本次删除连带清掉的会话行，删除成功后写进回收站批次
+        var removedChats: [DeletedChat] = []
+
         // 删除前的库内条数，供删除后校验用
         let beforeCount: Int = {
             guard let db = try? Database.shared.writeConnection() else { return -1 }
@@ -264,14 +316,10 @@ final class DeleteService {
                 chats: chatMap[rid] ?? []
             )
         }
-        let batchID = Fmt.stamp.string(from: Date())
-        let batch = TrashBatch(id: batchID, time: Fmt.full.string(from: Date()),
-                               count: rows.count, source: source, ruleName: ruleName,
-                               isDemo: Database.shared.isDemo, rows: rows)
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-        let data = try encoder.encode(batch)
-        try data.write(to: trashDir.appendingPathComponent("batch-\(batchID).json"))
+        // 批次 ID 用毫秒 + 进程内序号。秒级精度不够：连续两次删除若落在同一秒，
+        // 后一次会覆盖前一次的回收站文件（实测踩到过）。
+        batchSeq &+= 1
+        let batchID = "\(Self.stampMs.string(from: Date()))-\(batchSeq)"
 
         // 执行删除
         let db = try Database.shared.writeConnection()
@@ -310,6 +358,44 @@ final class DeleteService {
                 }
                 Log.event("delete.chunk", "index", "\(ci)", "rows", "\(chunk.count)")
             }
+            // 清理因本次删除而变空的会话。
+            // 只删 message 和关联行不够：chat 表里的会话记录会留下，
+            // 「信息」App 的列表里就多一个点进去空白的对话。
+            var chatsRemoved = 0
+            if db.hasTable("chat") {
+                let affected = Set(chatMap.values.flatMap { $0 })
+                for chatId in affected where !db.isClosed {
+                    let left = db.scalarInt(
+                        "SELECT COUNT(*) FROM chat_message_join WHERE chat_id = ?",
+                        bind: chatId) ?? 0
+                    guard left == 0 else { continue }
+
+                    if db.hasTable("chat_handle_join") {
+                        _ = try? db.exec("DELETE FROM chat_handle_join WHERE chat_id = ?",
+                                         bind: chatId)
+                    }
+                    // 会话自身的属性/元数据表（不同系统版本表名可能有差异）
+                    for extra in ["chat_properties", "chat_service_join"] where db.hasTable(extra) {
+                        _ = try? db.exec("DELETE FROM \(extra) WHERE chat_id = ?", bind: chatId)
+                    }
+                    // 先把整行读出来存档，还原时才能把会话找回来
+                    if let row = readChatRow(db, chatId) {
+                        removedChats.append(row)
+                    }
+                    do {
+                        try db.exec("DELETE FROM chat WHERE ROWID = ?", bind: chatId)
+                        chatsRemoved += 1
+                    } catch {
+                        Log.error("delete.chat_failed", code: 1,
+                                  msg: error.localizedDescription,
+                                  extra: ["chat_id": "\(chatId)"])
+                    }
+                }
+                if chatsRemoved > 0 {
+                    Log.event("delete.empty_chats", "removed", "\(chatsRemoved)")
+                }
+            }
+
             try db.exec("COMMIT")
             Log.event("delete.commit", "rows", "\(deleted)",
                       "ms", "\(Int(Date().timeIntervalSince(t0) * 1000))")
@@ -333,6 +419,20 @@ final class DeleteService {
         let expected = beforeCount >= 0 ? beforeCount - deleted : -1
         Log.event("delete.verify", "expected", "\(expected)", "actual", "\(remaining)",
                   "before", "\(beforeCount)")
+
+        // 删除已提交，这时才写回收站批次——removedChats 要在事务里才收集得全。
+        // 万一写文件失败，删除本身已生效，但整库备份还在，用户仍可还原。
+        let batch = TrashBatch(id: batchID, time: Fmt.full.string(from: Date()),
+                               count: rows.count, source: source, ruleName: ruleName,
+                               isDemo: Database.shared.isDemo, rows: rows,
+                               deletedChats: removedChats.isEmpty ? nil : removedChats)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(batch)
+        let batchURL = trashDir.appendingPathComponent("batch-\(batchID).json")
+        try data.write(to: batchURL)
+        Log.event("delete.trash_write", "id", batchID, "rows", "\(rows.count)",
+                  "chats", "\(removedChats.count)", "bytes", "\(data.count)")
         if expected >= 0, remaining >= 0, remaining != expected {
             Log.error("delete.verify_failed", code: 3,
                       msg: "删除后库内条数与预期不符",
@@ -374,6 +474,7 @@ final class DeleteService {
 
         let db = try Database.shared.writeConnection()
         var restored = 0
+        var chatsRestored = 0
         do {
             try db.exec("BEGIN IMMEDIATE")
             let cols = db.columns(of: "message")
@@ -418,6 +519,26 @@ final class DeleteService {
                 } else {
                     Log.error("restore.row_failed", code: 1, msg: db.lastError(),
                               extra: ["row": "\(row.rowid)"])
+                }
+            }
+
+            // 还原被清空的会话：先写回 chat 行，chat_message_join 才有落点
+            if db.hasTable("chat") {
+                for chat in batch.deletedChats ?? [] {
+                    let cols = chat.columns.joined(separator: ", ")
+                    let marks = Array(repeating: "?", count: chat.columns.count)
+                        .joined(separator: ", ")
+                    guard let cstmt = try? db.prepare(
+                        "INSERT OR REPLACE INTO chat (\(cols)) VALUES (\(marks))")
+                    else { continue }
+                    defer { sqlite3_finalize(cstmt) }
+                    for (i, v) in chat.values.enumerated() {
+                        v.bind(cstmt, Int32(i + 1))
+                    }
+                    if sqlite3_step(cstmt) == SQLITE_DONE { chatsRestored += 1 }
+                }
+                if chatsRestored > 0 {
+                    Log.event("restore.chats", "restored", "\(chatsRestored)")
                 }
             }
 
@@ -503,6 +624,45 @@ final class DeleteService {
 }
 
 // MARK: - 辅助
+
+/// 读出 chat 表一整行，转成与表结构无关的通用表示
+private func readChatRow(_ db: SQLiteDB, _ rowid: Int64) -> DeletedChat? {
+    guard let stmt = try? db.prepare("SELECT * FROM chat WHERE ROWID = ?") else { return nil }
+    defer { sqlite3_finalize(stmt) }
+    sqlite3_bind_int64(stmt, 1, rowid)
+    guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
+
+    let n = sqlite3_column_count(stmt)
+    var cols: [String] = []
+    var vals: [CellValue] = []
+    for i in 0..<n {
+        let name = sqlite3_column_name(stmt, i).map { String(cString: $0) } ?? "c\(i)"
+        cols.append(name)
+        switch sqlite3_column_type(stmt, i) {
+        case SQLITE_INTEGER:
+            vals.append(.int(sqlite3_column_int64(stmt, i)))
+        case SQLITE_FLOAT:
+            vals.append(.real(sqlite3_column_double(stmt, i)))
+        case SQLITE_TEXT:
+            if let c = sqlite3_column_text(stmt, i) {
+                vals.append(.text(String(cString: c)))
+            } else {
+                vals.append(.null)
+            }
+        case SQLITE_BLOB:
+            if let p = sqlite3_column_blob(stmt, i) {
+                let sz = Int(sqlite3_column_bytes(stmt, i))
+                let d = Data(bytes: p, count: sz)
+                vals.append(.blob(d.base64EncodedString()))
+            } else {
+                vals.append(.null)
+            }
+        default:
+            vals.append(.null)
+        }
+    }
+    return DeletedChat(rowid: rowid, columns: cols, values: vals)
+}
 
 func bindText(_ stmt: OpaquePointer, _ idx: Int32, _ value: String?) {
     if let v = value {

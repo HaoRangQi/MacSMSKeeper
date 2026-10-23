@@ -25,6 +25,8 @@ final class SQLiteDB {
         sqlite3_busy_timeout(h, 3000)
     }
 
+    var isClosed: Bool { handle == nil }
+
     deinit { if handle != nil { sqlite3_close(handle) } }
 
     func close() {
@@ -38,6 +40,17 @@ final class SQLiteDB {
             let msg = err.map { String(cString: $0) } ?? "SQL 执行失败"
             sqlite3_free(err)
             throw DBError.sql(msg)
+        }
+    }
+
+    /// 带一个整数参数的 exec。参数走绑定，避免字符串拼接 SQL
+    func exec(_ sql: String, bind: Int64) throws {
+        guard let h = handle else { throw DBError.open("连接已关闭") }
+        guard let stmt = try? prepare(sql) else { throw DBError.sql("SQL 准备失败：\(sql)") }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int64(stmt, 1, bind)
+        if sqlite3_step(stmt) != SQLITE_DONE {
+            throw DBError.sql(String(cString: sqlite3_errmsg(h)))
         }
     }
 
@@ -176,9 +189,13 @@ final class SQLiteDB {
         return registered
     }
     /// 执行一条返回单行单列的整数 SQL
-    func scalarInt(_ sql: String) -> Int? {
+    func scalarInt(_ sql: String) -> Int? { scalarInt(sql, bind: nil) }
+
+    func scalarInt(_ sql: String, bind: Int64?) -> Int? {
+        guard handle != nil else { return nil }
         guard let stmt = try? prepare(sql) else { return nil }
         defer { sqlite3_finalize(stmt) }
+        if let b = bind { sqlite3_bind_int64(stmt, 1, b) }
         guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
         return Int(sqlite3_column_int64(stmt, 0))
     }

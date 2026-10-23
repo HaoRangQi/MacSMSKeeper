@@ -189,6 +189,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// 自检辅助：在测试库上执行一条返回整数的 SQL
+    private static func scalar(_ sql: String) -> Int? {
+        guard let db = try? SQLiteDB(path: Database.shared.activePath, readOnly: true)
+        else { return nil }
+        defer { db.close() }
+        return db.scalarInt(sql)
+    }
+
+    private static func tableExists(_ name: String) -> Bool {
+        guard let db = try? SQLiteDB(path: Database.shared.activePath, readOnly: true)
+        else { return false }
+        defer { db.close() }
+        return db.hasTable(name)
+    }
+
     @MainActor
     private func runSelfTest() async {
         let state = AppState.shared
@@ -288,6 +303,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if !state.isDemo {
             Snapshot.log("[test] 指定测试库：允许执行删除/还原闭环")
+        }
+
+        // 专项：空会话清理。chat 900 只关联 ROWID=1 一条消息，
+        // 删掉它之后 chat 900 应该被清除，而 chat 901 还有消息、必须保留。
+        let hasChatTable = Database.shared.activePath != Database.shared.realPath
+            && Self.tableExists("chat")
+        if hasChatTable, state.all.contains(where: { $0.id == 1 }) {
+            let c900 = Self.scalar("SELECT COUNT(*) FROM chat WHERE ROWID = 900") ?? -1
+            let c901 = Self.scalar("SELECT COUNT(*) FROM chat WHERE ROWID = 901") ?? -1
+            let ok = await state.delete(ids: [1], source: "test")
+            let c900after = Self.scalar("SELECT COUNT(*) FROM chat WHERE ROWID = 900") ?? -1
+            let c901after = Self.scalar("SELECT COUNT(*) FROM chat WHERE ROWID = 901") ?? -1
+
+            // 立刻还原这个批次，验证会话能被找回来（闭环）
+            var c900back = -1
+            if let batch = state.trash.first(where: { $0.count == 1 && $0.source == "test" }) {
+                _ = await state.restore(batch)
+                c900back = Self.scalar("SELECT COUNT(*) FROM chat WHERE ROWID = 900") ?? -1
+            }
+            Snapshot.log("[test] 空会话清理：删除 ROWID=1 -> ok=\(ok)  "
+                         + "chat900 \(c900)->\(c900after)->还原后\(c900back)（应 1->0->1）  "
+                         + "chat901 \(c901)->\(c901after)（应 1->1）")
         }
 
         let before = state.all.count
