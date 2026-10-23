@@ -6,6 +6,7 @@
 
 # 构建产物
 build/
+dist/
 *.app/
 *.dSYM/
 *.xcarchive

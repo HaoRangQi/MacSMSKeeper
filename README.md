@@ -8,6 +8,15 @@
   <img src="docs/images/dashboard.png" width="720" alt="概览">
 </p>
 
+<p align="center">
+  <a href="https://github.com/HaoRangQi/MacSMSKeeper/releases/latest">
+    <img src="https://img.shields.io/badge/下载-v1.0.0-blue?style=flat-square" alt="下载">
+  </a>
+  <img src="https://img.shields.io/badge/macOS-26%2B-orange?style=flat-square" alt="macOS 26+">
+  <img src="https://img.shields.io/badge/Swift-6-orange?style=flat-square" alt="Swift 6">
+  <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="MIT">
+</p>
+
 ## 为什么做这个
 
 macOS 的「信息」App 没有批量管理能力：几万条短信只能一条条滑、搜索很弱、无法按类型清理。
@@ -71,6 +80,13 @@ macOS 的「信息」App 没有批量管理能力：几万条短信只能一条�
 
 - macOS **26.0** 或更高（使用 Liquid Glass 设计语言）
 - 编译需要 Command Line Tools（`xcode-select --install`），**不需要完整 Xcode**
+
+## 下载安装
+
+不想编译的话，直接去 [Releases](https://github.com/HaoRangQi/MacSMSKeeper/releases/latest)
+下载 `MacSMSKeeper-v1.0.0-macos26.zip`，解压后拖到「应用程序」。
+
+> 应用未做代码签名与公证，首次打开请**右键 → 打开**。
 
 ## 快速开始
 

@@ -1,15 +1,26 @@
 APP_NAME := 短信管家
+PRODUCT  := MacSMSKeeper
+VERSION  ?= 1.0.0
 BUILD    := build
+DIST     := dist
 BUNDLE   := $(BUILD)/$(APP_NAME).app
 BIN      := $(BUNDLE)/Contents/MacOS/SMSKeeper
 
-.PHONY: all build run clean selftest snapshot exporttest help
+.PHONY: all build run clean distclean selftest snapshot exporttest help
 
 all: build
 
 ## 编译并组装 .app 到 build/
 build:
 	@./scripts/build.sh
+
+## 干净构建并打包 Release 用的 zip 到 dist/
+dist: clean build
+	@mkdir -p "$(DIST)"
+	@cd "$(BUILD)" && ditto -c -k --sequesterRsrc --keepParent \
+	    "$(APP_NAME).app" "../$(DIST)/$(PRODUCT)-v$(VERSION)-macos26.zip"
+	@shasum -a 256 "$(DIST)/$(PRODUCT)-v$(VERSION)-macos26.zip"
+	@echo "==> $(DIST)/$(PRODUCT)-v$(VERSION)-macos26.zip"
 
 ## 编译后启动
 run: build
@@ -18,6 +29,10 @@ run: build
 ## 删除构建产物
 clean:
 	@rm -rf "$(BUILD)"
+
+## 删除构建产物与分发包
+distclean:
+	@rm -rf "$(BUILD)" "$(DIST)"
 
 ## 自检：载入、分类、搜索、导航、删除/还原闭环
 selftest: build
