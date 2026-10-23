@@ -170,6 +170,41 @@ make clean       # 清理构建产物
 | 切换分类 | 0–8 ms |
 | 搜索 | ~25 ms |
 
+## 发版
+
+### 方式一：本地一键发版（现在就能用）
+
+在一台 macOS 26+ 的 Mac 上：
+
+```bash
+./scripts/release.sh 1.1.0
+```
+
+依次完成：本地化检查 → 自检 → 打包 → 打 tag 推送代码 → 创建 Release 上传安装包。
+不需要安装 `gh`，凭据从系统 Keychain 取。
+
+### 方式二：CI 自动发版
+
+推送 tag 即触发：
+
+```bash
+git tag -a v1.1.0 -m "短信管家 1.1.0"
+git push origin v1.1.0
+```
+
+或在 GitHub 网页上进 Actions › Release › Run workflow 填版本号。
+
+> 当前 GitHub 托管的 macOS runner 最高到 macOS 15，低于本项目要求的 26 SDK，
+> 所以 CI 会跳过构建并提示改用方式一。**等 GitHub 提供 macOS 26 runner 后，
+> 不需要改任何配置就会自动开始构建和发版。**
+
+### CI 还包含
+
+| 工作流 | 作用 |
+|---|---|
+| Validate | 本地化词条检查（重复 key / 缺失词条 / 占位符不一致）、README 图片引用、文档完整性 |
+| Build | 编译 + 自检，产物作为 artifact 上传 |
+
 ## 数据与隐私
 
 - 所有处理都在本机完成，**不联网、不上传**

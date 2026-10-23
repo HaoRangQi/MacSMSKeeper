@@ -1,0 +1,37 @@
+name: Bug 反馈
+description: 报告一个问题
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        提交前请确认：已在「设置与诊断」中授予完全磁盘访问权限，并重启过 App。
+  - type: input
+    id: env
+    attributes:
+      label: 环境
+      description: macOS 版本、App 版本
+      placeholder: macOS 27.0.1 · 短信管家 1.0.0
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: 问题描述
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+    validations:
+      required: true
+  - type: textarea
+    id: expect
+    attributes:
+      label: 期望行为
+  - type: textarea
+    id: log
+    attributes:
+      label: 相关日志或截图
+      render: shell

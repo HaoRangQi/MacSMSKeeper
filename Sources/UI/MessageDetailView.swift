@@ -36,7 +36,7 @@ struct MessageDetailView: View {
                     Button {
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString(message.text, forType: .string)
-                        state.toast = "已复制全文"
+                        state.toast = L.t("已复制全文")
                     } label: {
                         Label(L.t("复制全文"), systemImage: "doc.on.doc")
                     }

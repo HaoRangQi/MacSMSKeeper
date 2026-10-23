@@ -1,0 +1,46 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 本项目要求 macOS 26 SDK（Liquid Glass）。
+      # 当前 GitHub 托管的 macOS runner 还低于 26，此时跳过而不是报错；
+      # 等 runner 升级后无需改这里就会自动开始构建。
+      - name: 检查 macOS SDK
+        id: sdk
+        run: |
+          VER="$(xcrun --show-sdk-version 2>/dev/null || echo 0)"
+          MAJOR="${VER%%.*}"
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          if [ "${MAJOR:-0}" -ge 26 ]; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::runner 的 macOS SDK 为 $VER，低于 26，跳过构建。等 GitHub 提供 macOS 26 runner 后自动生效。"
+          fi
+
+      - name: 编译
+        if: steps.sdk.outputs.ok == 'true'
+        run: make build
+
+      - name: 自检
+        if: steps.sdk.outputs.ok == 'true'
+        run: make selftest
+
+      - name: 上传构建产物
+        if: steps.sdk.outputs.ok == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: SMSKeeper
+          path: build/短信管家.app
+          if-no-files-found: error

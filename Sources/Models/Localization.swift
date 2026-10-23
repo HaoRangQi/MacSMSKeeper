@@ -116,8 +116,6 @@ enum L {
 
         // 列表
         "条结果": "results",
-        "已显示 %d": "showing %d",
-        "已选 %d": "%d selected",
         "清除筛选": "Clear Filters",
         "显示更多（还有 %d 条）": "Show more (%d left)",
         "没有匹配的短信": "No matching messages",
@@ -132,8 +130,6 @@ enum L {
         "验证码已复制": "Code copied",
         "已复制": "Copied",
         "已复制全文": "Text copied",
-        "导出所选为 CSV…": "Export Selected as CSV…",
-
         // 详情
         "未知发件人": "Unknown Sender",
         "未知": "Unknown",
@@ -202,7 +198,6 @@ enum L {
         "按时间批量清理": "Bulk Delete by Age",
         "删除设定天数之前的全部短信，可保留指定类型。":
             "Delete everything older than the given days, keeping chosen types.",
-        "删除 %d 天前的": "Delete older than %d days",
         "保留": "Keep",
         "命中 %d 条": "%d matched",
         "执行「%@」？": "Run \"%@\"?",
@@ -313,8 +308,6 @@ enum L {
         "CSV 表格 (.csv)": "CSV (.csv)",
         "纯文本": "Plain Text",
         "时间,发件人,分类,验证码,内容": "Time,Sender,Category,Code,Content",
-        "· 共 %d 条短信": "· %d messages",
-        "%@ 至 %@": "%@ – %@",
         "短信": "Messages",
         "刷新数据": "Refresh Data",
         "删除所选…": "Delete Selected…",

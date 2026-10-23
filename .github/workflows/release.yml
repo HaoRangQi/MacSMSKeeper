@@ -1,0 +1,85 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号（不带 v，例如 1.0.1）'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 确定版本号
+        id: ver
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            V="${{ inputs.version }}"
+          else
+            V="${GITHUB_REF_NAME#v}"
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "tag=v$V" >> "$GITHUB_OUTPUT"
+
+      - name: 本地化检查
+        run: python3 scripts/check-localization.py
+
+      # 需要 macOS 26 SDK。runner 还达不到时给出明确指引，
+      # 让用户改用本地 scripts/release.sh（在 macOS 26+ 的 Mac 上执行）。
+      - name: 检查 macOS SDK
+        id: sdk
+        run: |
+          VER="$(xcrun --show-sdk-version 2>/dev/null || echo 0)"
+          MAJOR="${VER%%.*}"
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          if [ "${MAJOR:-0}" -ge 26 ]; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 自检
+        if: steps.sdk.outputs.ok == 'true'
+        run: make selftest
+
+      - name: 构建并打包
+        if: steps.sdk.outputs.ok == 'true'
+        run: make dist VERSION="${{ steps.ver.outputs.version }}"
+
+      - name: 提取更新说明
+        if: steps.sdk.outputs.ok == 'true'
+        run: |
+          python3 scripts/changelog-section.py "${{ steps.ver.outputs.version }}" > notes.md \
+            || echo "短信管家 ${{ steps.ver.outputs.version }}" > notes.md
+          head -5 notes.md
+
+      - name: 创建 Release 并上传
+        if: steps.sdk.outputs.ok == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ steps.ver.outputs.tag }}" \
+            dist/MacSMSKeeper-v${{ steps.ver.outputs.version }}-macos26.zip \
+            --title "短信管家 ${{ steps.ver.outputs.version }}" \
+            --notes-file notes.md
+
+      - name: runner 无法构建时
+        if: steps.sdk.outputs.ok != 'true'
+        run: |
+          {
+            echo "::error::当前 runner 的 macOS SDK 为 ${{ steps.sdk.outputs.version }}，低于 26，无法在 CI 上构建。"
+            echo "请在一台 macOS 26+ 的 Mac 上执行："
+            echo "    ./scripts/release.sh ${{ steps.ver.outputs.version }}"
+            echo "（tag ${{ steps.ver.outputs.tag }} 已推送，脚本会自动创建 Release 并上传安装包）"
+          } >&2
+          exit 1

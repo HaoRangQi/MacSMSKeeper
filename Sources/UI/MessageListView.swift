@@ -150,14 +150,14 @@ struct MessageListView: View {
             } label: {
                 Label(L.t("导出"), systemImage: "square.and.arrow.up")
             }
-            .help("导出当前筛选结果或所选短信 (⌘E)")
+            .help(L.t("导出当前筛选结果或所选短信 (⌘E)"))
 
             Button {
                 Task { await state.load() }
             } label: {
                 Label(L.t("刷新"), systemImage: "arrow.clockwise")
             }
-            .help("重新读取数据库 (⌘R)")
+            .help(L.t("重新读取数据库 (⌘R)"))
         }
     }
 }

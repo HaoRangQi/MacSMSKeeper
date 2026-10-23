@@ -1,0 +1,45 @@
+name: Validate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  i18n:
+    name: 本地化检查
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 检查词条
+        run: python3 scripts/check-localization.py
+
+      - name: 检查 README 引用的图片存在
+        run: |
+          missing=0
+          for img in $(grep -oE 'docs/images/[A-Za-z0-9._-]+\.png' README.md | sort -u); do
+            [ -f "$img" ] || { echo "::error file=README.md::缺少图片 $img"; missing=1; }
+          done
+          [ $missing -eq 0 ] && echo "图片引用完整"
+
+  docs:
+    name: 文档结构
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 必需文件存在
+        run: |
+          for f in README.md README.en.md LICENSE CHANGELOG.md CONTRIBUTING.md \
+                   Makefile scripts/build.sh scripts/release.sh \
+                   docs/architecture.md docs/permissions.md; do
+            [ -f "$f" ] || { echo "::error::缺少 $f"; exit 1; }
+          done
+          echo "文件齐全"
+      - name: 构建脚本可执行
+        run: |
+          for f in scripts/*.sh; do
+            [ -x "$f" ] || { echo "::error file=$f::没有可执行权限"; exit 1; }
+          done
+          echo "权限正常"
