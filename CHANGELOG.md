@@ -21,6 +21,21 @@
 - 国际化：简体中文 / English，日期格式随语言切换
 - 开发工具：`make selftest` 自检、`make snapshot` 截图、`make exporttest` 导出样例
 
+### 修复
+
+- 删除时报 `no such function: after_delete_message_plugin`：「信息」App 会向
+  chat.db 注册私有 SQL 函数，库内触发器删除时调用它们。现在写连接会自动扫描
+  触发器并注册这些函数的空实现，删除不再失败。
+- 删除失败时错误信息丢失 SQLite 原文（只显示「删除消息失败」），现在会带出
+  真实原因；`database is locked` / 只读等常见错误也给了可操作提示。
+
+### 新增
+
+- 诊断日志（默认关闭）：记录操作步骤、SQLite 错误码、条数、耗时。
+  隐私由代码强制——字段黑名单命中即替换为占位符，绝不落盘短信内容。
+  入口：设置与诊断 › 诊断日志，可在访达中打开或清空。
+- `docs/troubleshooting.md`：排查指南与已知问题。
+
 ### 说明
 
 - 最低系统版本 macOS 26.0

@@ -8,6 +8,12 @@ A native macOS app for managing the Messages database — built around **bulk cl
   <img src="docs/images/dashboard.png" width="720" alt="Overview">
 </p>
 
+## Troubleshooting
+
+Enable **Settings & Diagnostics › Diagnostics Log**, reproduce the issue, and send the
+log file. It records steps and errors only — never message content, numbers or codes
+(enforced in code). See [docs/troubleshooting.md](docs/troubleshooting.md).
+
 ## Why
 
 The built-in Messages app on macOS has no bulk management: tens of thousands of

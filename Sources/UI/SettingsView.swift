@@ -24,6 +24,7 @@ struct SettingsView: View {
                 sourceCard
                 languageCard
                 appearanceCard
+                diagnosticsCard
                 backupCard
                 aboutCard
 
@@ -161,6 +162,75 @@ struct SettingsView: View {
                 }
             }
         }
+    }
+
+    /// 诊断卡：调试日志开关。默认关闭，出问题时打开复现，再把日志给人看。
+    private var diagnosticsCard: some View {
+        Card {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Text(L.t("诊断日志"))
+                        .font(.system(size: Typo.s(13), weight: .semibold))
+                    Spacer()
+                    Toggle("", isOn: logBinding)
+                        .toggleStyle(.switch)
+                        .labelsHidden()
+                        .controlSize(.small)
+                }
+
+                Text(L.t("出问题时打开此开关，重现一次操作，再把日志文件发给开发者。"))
+                    .font(.system(size: Typo.s(11.5)))
+                    .foregroundStyle(.secondary)
+
+                // 隐私说明要写清楚，用户才知道打开它不会泄露短信
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "lock.shield")
+                        .font(.system(size: Typo.s(10)))
+                        .foregroundStyle(.green)
+                    Text(L.t("只记录操作步骤、错误信息和条数，绝不记录短信内容、号码或验证码。"))
+                        .font(.system(size: Typo.s(11)))
+                        .foregroundStyle(.secondary)
+                }
+
+                HStack(spacing: 8) {
+                    Button {
+                        Log.revealInFinder()
+                    } label: {
+                        Label(L.t("在访达中显示"), systemImage: "folder")
+                    }
+                    .controlSize(.small)
+
+                    Button(role: .destructive) {
+                        Log.clear()
+                        state.toast = L.t("日志已清空")
+                    } label: {
+                        Label(L.t("清空日志"), systemImage: "trash")
+                    }
+                    .controlSize(.small)
+
+                    Spacer()
+
+                    Text(Log.logFileURL.path)
+                        .font(.system(size: Typo.s(9.5), design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+        }
+    }
+
+    private var logBinding: Binding<Bool> {
+        Binding(
+            get: { UserDefaults.standard.bool(forKey: Log.enabledKey) },
+            set: { newValue in
+                UserDefaults.standard.set(newValue, forKey: Log.enabledKey)
+                Log.refresh()
+                state.toast = newValue
+                    ? L.t("诊断日志已开启，路径：~/Library/Logs/SMSKeeper")
+                    : L.t("诊断日志已关闭")
+            }
+        )
     }
 
     private var backupCard: some View {

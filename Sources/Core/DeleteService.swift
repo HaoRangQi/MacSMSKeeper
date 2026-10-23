@@ -221,16 +221,24 @@ final class DeleteService {
         guard !messages.isEmpty else {
             return DeleteResult(deleted: 0, backupName: "", batchID: "")
         }
+        Log.event("delete.begin", "count", "\(messages.count)", "source", source,
+                  "rule", ruleName ?? "-",
+                  "mode", Database.shared.isDemo ? "demo" : "real")
         if !Database.shared.isDemo {
+            Log.event("delete.quit_messages", "running",
+                      DeleteService.shared.messagesRunning ? "1" : "0")
             guard quitMessages() else {
+                Log.error("delete.quit_messages_failed", code: 2, msg: "信息 App 未能退出")
                 throw NSError(domain: "SMSKeeper", code: 1, userInfo: [
                     NSLocalizedDescriptionKey:
                         "「信息」App 仍在运行，为避免数据库损坏已中止。请先退出「信息」后再试。"
                 ])
             }
+            Log.event("delete.quit_messages", "result", "ok")
         }
 
         let backup = try createBackup(tag: "before-delete")
+        Log.event("delete.backup", "name", backup.name, "mb", "\(backup.sizeMB)")
         let ids = messages.map(\.id)
 
         // 先把原始行写入回收站
@@ -260,15 +268,22 @@ final class DeleteService {
         // 执行删除
         let db = try Database.shared.writeConnection()
         var deleted = 0
+        let t0 = Date()
         do {
             try db.exec("BEGIN IMMEDIATE")
-            for chunk in ids.chunked(400) {
+            Log.event("delete.txn", "state", "begin")
+            for (ci, chunk) in ids.chunked(400).enumerated() {
                 let ph = Array(repeating: "?", count: chunk.count).joined(separator: ",")
                 let stmt = try db.prepare("DELETE FROM message WHERE ROWID IN (\(ph))")
                 for (i, v) in chunk.enumerated() { sqlite3_bind_int64(stmt, Int32(i + 1), v) }
                 if sqlite3_step(stmt) != SQLITE_DONE {
+                    let msg = db.lastError()
                     sqlite3_finalize(stmt)
-                    throw DBError.sql("删除消息失败")
+                    Log.error("delete.stmt_failed", code: 1, msg: msg,
+                              extra: ["table": "message", "chunk": "\(ci)",
+                                      "size": "\(chunk.count)",
+                                      "sql": "DELETE FROM message WHERE ROWID IN (\(ph))"])
+                    throw DBError.sql(msg)
                 }
                 deleted += Int(sqlite3_changes(db.handle))
                 sqlite3_finalize(stmt)
@@ -276,18 +291,29 @@ final class DeleteService {
                 for table in ["chat_message_join", "message_attachment_join"] where db.hasTable(table) {
                     let s2 = try db.prepare("DELETE FROM \(table) WHERE message_id IN (\(ph))")
                     for (i, v) in chunk.enumerated() { sqlite3_bind_int64(s2, Int32(i + 1), v) }
-                    sqlite3_step(s2)
+                    if sqlite3_step(s2) != SQLITE_DONE {
+                        let msg = db.lastError()
+                        sqlite3_finalize(s2)
+                        Log.error("delete.child_failed", code: 1, msg: msg,
+                                  extra: ["table": table, "chunk": "\(ci)"])
+                        throw DBError.sql(msg)
+                    }
                     sqlite3_finalize(s2)
                 }
+                Log.event("delete.chunk", "index", "\(ci)", "rows", "\(chunk.count)")
             }
             try db.exec("COMMIT")
+            Log.event("delete.commit", "rows", "\(deleted)",
+                      "ms", "\(Int(Date().timeIntervalSince(t0) * 1000))")
             try? db.exec("PRAGMA wal_checkpoint(TRUNCATE)")
         } catch {
             try? db.exec("ROLLBACK")
+            Log.event("delete.rollback", "rows_deleted_so_far", "\(deleted)")
             db.close()
             throw error
         }
         db.close()
+        Log.event("delete.done", "deleted", "\(deleted)", "backup", backup.name)
 
         return DeleteResult(deleted: deleted, backupName: backup.name, batchID: batchID)
     }
@@ -357,7 +383,12 @@ final class DeleteService {
                 sqlite3_bind_int64(stmt, idx, row.handleId); idx += 1
                 sqlite3_bind_int(stmt, idx, Int32(row.hasAtt)); idx += 1
 
-                if sqlite3_step(stmt) == SQLITE_DONE { restored += 1 }
+                if sqlite3_step(stmt) == SQLITE_DONE {
+                    restored += 1
+                } else {
+                    Log.error("restore.row_failed", code: 1, msg: db.lastError(),
+                              extra: ["row": "\(row.rowid)"])
+                }
             }
 
             if db.hasTable("chat_message_join") {

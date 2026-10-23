@@ -224,6 +224,12 @@ git push origin v1.1.0
 | Validate | 本地化词条检查（重复 key / 缺失词条 / 占位符不一致）、README 图片引用、文档完整性 |
 | Build | 编译 + 自检，产物作为 artifact 上传 |
 
+## 出问题时
+
+打开「设置与诊断 › 诊断日志」，重现一次操作，把日志发给开发者。
+日志只记录操作步骤和错误信息，**不记录短信内容、号码或验证码**（代码层强制）。
+详见 [docs/troubleshooting.md](docs/troubleshooting.md)。
+
 ## 数据与隐私
 
 - 所有处理都在本机完成，**不联网、不上传**

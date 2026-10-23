@@ -324,5 +324,15 @@ enum L {
             "~/Library/Messages/chat.db not found. Make sure Messages is set up on this Mac.",
         "找不到 ~/Library/Messages/chat.db": "~/Library/Messages/chat.db not found",
         "读取失败：%@": "Read failed: %@",
+        "诊断日志": "Diagnostics Log",
+        "出问题时打开此开关，重现一次操作，再把日志文件发给开发者。": "Turn this on when something goes wrong, reproduce the issue, then send the log file.",
+        "只记录操作步骤、错误信息和条数，绝不记录短信内容、号码或验证码。": "Records steps, errors and counts only — never message content, numbers or codes.",
+        "清空日志": "Clear Log",
+        "日志已清空": "Log cleared",
+        "诊断日志已开启，路径：~/Library/Logs/SMSKeeper": "Diagnostics log on · ~/Library/Logs/SMSKeeper",
+        "诊断日志已关闭": "Diagnostics log off",
+        "这是「信息」App 的私有数据库函数缺失，通常是系统版本变化导致的。数据未受影响。请到「设置与诊断 › 诊断日志」打开开关，重现一次操作，把日志文件发给开发者即可定位。": "A private Messages database function is missing, usually after a macOS update. Your data is unaffected. Enable Diagnostics Log in Settings, reproduce the issue, and send the log file to the developer.",
+        "数据库被占用。请确认「信息」App 已完全退出后重试。": "Database is locked. Make sure the Messages app has fully quit, then retry.",
+        "数据库只读。请检查「设置与诊断」中的权限状态。": "Database is read-only. Check the permission status in Settings & Diagnostics.",
     ]
 }

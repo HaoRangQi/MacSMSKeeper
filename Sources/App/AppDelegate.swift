@@ -252,11 +252,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             state.selection = []
         }
 
-        // 破坏性测试只在演示库上做
-        guard state.isDemo else {
-            Snapshot.log("[test] 真实库：跳过删除/还原测试")
+        // 破坏性测试：演示库，或 SMSKEEPER_DB 明确指定的测试库。
+        // 判据是「当前库不是系统真实库」，绝不用真实短信做测试。
+        let isRealDB = Database.shared.activePath == Database.shared.realPath
+        guard state.isDemo || !isRealDB else {
+            Snapshot.log("[test] 系统真实库：跳过删除/还原测试（只读验证）")
             Snapshot.log("[test] 结论 通过（只读验证）")
             return
+        }
+        if !state.isDemo {
+            Snapshot.log("[test] 指定测试库：允许执行删除/还原闭环")
         }
 
         let before = state.all.count

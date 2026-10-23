@@ -50,6 +50,71 @@ final class SQLiteDB {
         return stmt!
     }
 
+
+    // MARK: macOS 私有 SQL 函数的兼容
+
+    /// 「信息」App 打开 chat.db 时会用 sqlite3_create_function 注册一批私有函数，
+    /// 库里的触发器在增删消息时调用它们（例如 after_delete_message_plugin）。
+    /// 我们的连接没有这些函数，DELETE 就会失败：
+    ///     no such function: after_delete_message_plugin
+    /// 解决办法是注册同名的空实现，让触发器正常走完。
+    /// 这些函数在「信息」App 内部大概是维护索引/缓存，App 已退出的情况下跳过无副作用。
+    private static let knownPluginFuncs = [
+        "after_delete_message_plugin",
+        "after_insert_message_plugin",
+        "after_update_message_plugin",
+        "before_delete_message_plugin",
+        "before_insert_message_plugin",
+        "before_update_message_plugin",
+    ]
+
+    /// 从触发器 SQL 里提取形如 xxx_plugin( 的函数名。
+    /// 动态扫描比硬编码更稳：将来 macOS 改了函数名也能覆盖。
+    private static func pluginFuncs(in sql: String) -> [String] {
+        var out: [String] = []
+        var search = sql
+        let pattern = #"([A-Za-z_][A-Za-z0-9_]*_plugin)\s*\("#
+        while let r = search.range(of: pattern, options: .regularExpression) {
+            let name = String(search[r]).replacingOccurrences(of: "(", with: "")
+                .trimmingCharacters(in: .whitespaces)
+            if !out.contains(name) { out.append(name) }
+            search = String(search[r.upperBound...])
+        }
+        return out
+    }
+
+    /// 给连接注册所有私有函数的空实现，返回实际注册的名字（供日志记录）
+    @discardableResult
+    func registerPluginShims() -> [String] {
+        guard let h = handle else { return [] }
+
+        var names = Set<String>(Self.knownPluginFuncs)
+
+        // 扫描库里全部触发器，动态补充
+        if let stmt = try? prepare("SELECT sql FROM sqlite_master WHERE type='trigger'") {
+            defer { sqlite3_finalize(stmt) }
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                if let c = sqlite3_column_text(stmt, 0) {
+                    let sql = String(cString: c)
+                    names.formUnion(Self.pluginFuncs(in: sql))
+                }
+            }
+        }
+
+        var registered: [String] = []
+        for name in names.sorted() {
+            // nArg = -1 表示任意参数个数
+            let rc = sqlite3_create_function(h, name, -1, SQLITE_UTF8, nil,
+                                             noopSQLFunc, nil, nil)
+            if rc == SQLITE_OK { registered.append(name) }
+        }
+        return registered
+    }
+    /// SQLite 的原始错误文本（比「删除消息失败」有用得多）
+    func lastError() -> String {
+        guard let h = handle else { return "连接已关闭" }
+        return String(cString: sqlite3_errmsg(h))
+    }
     func columns(of table: String) -> Set<String> {
         var out = Set<String>()
         guard let stmt = try? prepare("PRAGMA table_info(\(table))") else { return out }
@@ -253,7 +318,11 @@ final class Database {
     // MARK: 写入（删除 / 恢复）
 
     func writeConnection() throws -> SQLiteDB {
-        try SQLiteDB(path: activePath, readOnly: false)
+        let db = try SQLiteDB(path: activePath, readOnly: false)
+        let shims = db.registerPluginShims()
+        Log.event("db.write_connection", "path", (activePath as NSString).lastPathComponent,
+                  "shims", shims.joined(separator: ","))
+        return db
     }
 
     func chatIDs(for ids: [Int64]) -> [Int64: [Int64]] {
@@ -402,3 +471,10 @@ enum AttributedBody {
         return nil
     }
 }
+
+// MARK: - 私有 SQL 函数的空实现
+
+/// 注册给 after_delete_message_plugin 等 macOS 私有函数用，直接返回不做事。
+private let noopSQLFunc: @convention(c) (
+    OpaquePointer?, Int32, UnsafeMutablePointer<OpaquePointer?>?
+) -> Void = { _, _, _ in }

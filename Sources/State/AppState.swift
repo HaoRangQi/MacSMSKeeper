@@ -85,6 +85,7 @@ final class AppState: ObservableObject {
 
     func bootstrap() async {
         L.code = L.resolve(language)
+        Log.refresh()
         let access = Database.shared.checkAccess()
         permissionOK = access.0
         permissionDetail = access.1
@@ -353,9 +354,27 @@ final class AppState: ObservableObject {
             toast = lastDeleteInfo
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = Self.describe(error)
+            Log.error("delete.failed", code: (error as NSError).code,
+                      msg: error.localizedDescription,
+                      extra: ["source": source, "rule": ruleName ?? "-"])
             return false
         }
+    }
+
+    /// 把底层错误翻译成用户能看懂、能行动的话
+    private static func describe(_ error: Error) -> String {
+        let msg = error.localizedDescription
+        if msg.contains("no such function") {
+            return msg + "\n\n" + L.t("这是「信息」App 的私有数据库函数缺失，通常是系统版本变化导致的。数据未受影响。请到「设置与诊断 › 诊断日志」打开开关，重现一次操作，把日志文件发给开发者即可定位。")
+        }
+        if msg.contains("database is locked") || msg.contains("database is busy") {
+            return msg + "\n\n" + L.t("数据库被占用。请确认「信息」App 已完全退出后重试。")
+        }
+        if msg.contains("attempt to write a readonly database") {
+            return msg + "\n\n" + L.t("数据库只读。请检查「设置与诊断」中的权限状态。")
+        }
+        return msg
     }
 
     func restore(_ batch: TrashBatch) async -> Bool {
@@ -367,7 +386,10 @@ final class AppState: ObservableObject {
             toast = L.t("已还原 %d 条短信", n)
             return true
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = Self.describe(error)
+            Log.error("restore.failed", code: (error as NSError).code,
+                      msg: error.localizedDescription,
+                      extra: ["batch": batch.id, "count": "\(batch.count)"])
             return false
         }
     }
