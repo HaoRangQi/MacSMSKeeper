@@ -1,0 +1,404 @@
+import Foundation
+import SQLite3
+
+let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+
+// MARK: - 轻量 SQLite 封装
+
+final class SQLiteDB {
+    private(set) var handle: OpaquePointer?
+    let path: String
+
+    init(path: String, readOnly: Bool) throws {
+        self.path = path
+        var h: OpaquePointer?
+        let flags = readOnly
+            ? (SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX)
+            : (SQLITE_OPEN_READWRITE | SQLITE_OPEN_NOMUTEX)
+        let rc = sqlite3_open_v2(path, &h, flags, nil)
+        guard rc == SQLITE_OK, h != nil else {
+            let msg = h.map { String(cString: sqlite3_errmsg($0)) } ?? "无法打开数据库"
+            sqlite3_close(h)
+            throw DBError.open(msg)
+        }
+        handle = h
+        sqlite3_busy_timeout(h, 3000)
+    }
+
+    deinit { if handle != nil { sqlite3_close(handle) } }
+
+    func close() {
+        if handle != nil { sqlite3_close(handle); handle = nil }
+    }
+
+    func exec(_ sql: String) throws {
+        guard let h = handle else { throw DBError.open("连接已关闭") }
+        var err: UnsafeMutablePointer<CChar>?
+        if sqlite3_exec(h, sql, nil, nil, &err) != SQLITE_OK {
+            let msg = err.map { String(cString: $0) } ?? "SQL 执行失败"
+            sqlite3_free(err)
+            throw DBError.sql(msg)
+        }
+    }
+
+    func prepare(_ sql: String) throws -> OpaquePointer {
+        guard let h = handle else { throw DBError.open("连接已关闭") }
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(h, sql, -1, &stmt, nil) == SQLITE_OK, stmt != nil else {
+            throw DBError.sql(String(cString: sqlite3_errmsg(h)))
+        }
+        return stmt!
+    }
+
+    func columns(of table: String) -> Set<String> {
+        var out = Set<String>()
+        guard let stmt = try? prepare("PRAGMA table_info(\(table))") else { return out }
+        defer { sqlite3_finalize(stmt) }
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            if let c = sqlite3_column_text(stmt, 1) {
+                out.insert(String(cString: c))
+            }
+        }
+        return out
+    }
+
+    func hasTable(_ name: String) -> Bool {
+        guard let stmt = try? prepare(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?") else { return false }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_text(stmt, 1, name, -1, SQLITE_TRANSIENT)
+        return sqlite3_step(stmt) == SQLITE_ROW
+    }
+}
+
+enum DBError: LocalizedError {
+    case open(String)
+    case sql(String)
+    case permission
+
+    var errorDescription: String? {
+        switch self {
+        case .open(let m): return "无法打开数据库：\(m)"
+        case .sql(let m): return "数据库错误：\(m)"
+        case .permission: return "没有读取「信息」数据库的权限"
+        }
+    }
+}
+
+// MARK: - 数据访问
+
+final class Database {
+    static let shared = Database()
+
+    let realPath = NSString(string: "~/Library/Messages/chat.db").expandingTildeInPath
+    private(set) var activePath: String
+    private(set) var isDemo = false
+
+    /// 测试用：通过环境变量指定数据库路径
+    private static let overridePath = ProcessInfo.processInfo.environment["SMSKEEPER_DB"]
+
+    private init() {
+        if let o = Database.overridePath, !o.isEmpty {
+            activePath = o
+            isDemo = true
+        } else {
+            activePath = realPath
+        }
+    }
+
+    // MARK: 权限
+
+    /// 返回 (是否可读, 说明)
+    func checkAccess() -> (Bool, String) {
+        if isDemo { return (true, "演示数据") }
+        let dir = (realPath as NSString).deletingLastPathComponent
+        guard FileManager.default.fileExists(atPath: realPath) else {
+            return (false, L.t("找不到 ~/Library/Messages/chat.db，请确认这台 Mac 已启用「信息」"))
+        }
+        do {
+            _ = try FileManager.default.contentsOfDirectory(atPath: dir)
+        } catch {
+            return (false, L.t("系统拒绝访问 ~/Library/Messages，需要「完全磁盘访问权限」"))
+        }
+        do {
+            let db = try SQLiteDB(path: realPath, readOnly: true)
+            defer { db.close() }
+            _ = try db.prepare("SELECT 1 FROM message LIMIT 1")
+            return (true, L.t("权限正常"))
+        } catch {
+            return (false, L.t("读取失败：%@", error.localizedDescription))
+        }
+    }
+
+    /// 只检查系统真实库的权限（不受演示模式影响）
+    func checkRealAccess() -> (Bool, String) {
+        let dir = (realPath as NSString).deletingLastPathComponent
+        guard FileManager.default.fileExists(atPath: realPath) else {
+            return (false, L.t("找不到 ~/Library/Messages/chat.db"))
+        }
+        do {
+            _ = try FileManager.default.contentsOfDirectory(atPath: dir)
+        } catch {
+            return (false, L.t("系统拒绝访问 ~/Library/Messages，需要「完全磁盘访问权限」"))
+        }
+        do {
+            let db = try SQLiteDB(path: realPath, readOnly: true)
+            defer { db.close() }
+            _ = try db.prepare("SELECT 1 FROM message LIMIT 1")
+            return (true, L.t("权限正常"))
+        } catch {
+            return (false, L.t("读取失败：%@", error.localizedDescription))
+        }
+    }
+
+    // MARK: 读取
+
+    func loadMessages() throws -> [SMSMessage] {
+        let source = try resolveReadablePath()
+        let db = try SQLiteDB(path: source, readOnly: true)
+        defer { db.close() }
+
+        let cols = db.columns(of: "message")
+        let hasBody = cols.contains("attributedBody")
+        let hasAtt = cols.contains("cache_has_attachments")
+
+        func buildSQL(attExpr: String, joinHandle: Bool) -> String {
+            let handleJoin = joinHandle
+                ? "LEFT JOIN handle h ON h.ROWID = m.handle_id" : ""
+            let handleCol = joinHandle ? "h.id" : "NULL"
+            let whereClause = cols.contains("item_type")
+                ? "WHERE (m.item_type IS NULL OR m.item_type = 0)" : ""
+            return """
+            SELECT m.ROWID, m.guid, m.text,
+                   \(hasBody ? "m.attributedBody" : "NULL"),
+                   m.date, m.is_from_me, m.is_read, m.service,
+                   \(hasAtt ? "m.cache_has_attachments" : "0"),
+                   \(handleCol),
+                   \(attExpr)
+            FROM message m
+            \(handleJoin)
+            \(whereClause)
+            """
+        }
+
+        // 不同 macOS 版本的表结构有差异，按兼容性依次降级尝试
+        let hasJoinTable = db.hasTable("message_attachment_join")
+        var candidates: [String] = []
+        if hasJoinTable {
+            candidates.append(buildSQL(
+                attExpr: "(SELECT COUNT(1) FROM message_attachment_join x WHERE x.message_id = m.ROWID)",
+                joinHandle: true))
+        }
+        candidates.append(buildSQL(attExpr: "0", joinHandle: true))
+        candidates.append(buildSQL(attExpr: "0", joinHandle: false))
+
+        var stmt: OpaquePointer? = nil
+        var lastError = ""
+        for sql in candidates {
+            if let s = try? db.prepare(sql) { stmt = s; break }
+            lastError = "查询失败"
+        }
+        guard let stmt = stmt else { throw DBError.sql(lastError) }
+        defer { sqlite3_finalize(stmt) }
+
+        var out: [SMSMessage] = []
+        out.reserveCapacity(4096)
+
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            let rid = sqlite3_column_int64(stmt, 0)
+            let guid = textAt(stmt, 1) ?? ""
+            var body = textAt(stmt, 2) ?? ""
+            if body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                if let blob = blobAt(stmt, 3) {
+                    body = AttributedBody.extract(blob)
+                }
+            }
+            let rawDate = sqlite3_column_int64(stmt, 4)
+            let date = AppleTime.toDate(rawDate)
+            let fromMe = sqlite3_column_int(stmt, 5) != 0
+            let read = sqlite3_column_int(stmt, 6) != 0
+            let service = textAt(stmt, 7) ?? "SMS"
+            let att = max(Int(sqlite3_column_int(stmt, 8)), Int(sqlite3_column_int(stmt, 10)))
+            let sender = textAt(stmt, 9) ?? ""
+
+            out.append(SMSMessage(
+                id: rid, guid: guid, text: body, date: date,
+                isFromMe: fromMe, isRead: read, service: service,
+                sender: sender, chatIDs: [], attachments: att
+            ))
+        }
+        return out
+    }
+
+    /// 直连失败时（例如 WAL 只读受限），复制一份到临时目录再读
+    private func resolveReadablePath() throws -> String {
+        if isDemo { return activePath }
+        do {
+            let db = try SQLiteDB(path: activePath, readOnly: true)
+            db.close()
+            return activePath
+        } catch {
+            let tmp = NSTemporaryDirectory() + "smskeeper-read-\(UUID().uuidString)"
+            try FileManager.default.createDirectory(atPath: tmp, withIntermediateDirectories: true)
+            for suffix in ["", "-wal", "-shm"] {
+                let src = activePath + suffix
+                if FileManager.default.fileExists(atPath: src) {
+                    try FileManager.default.copyItem(atPath: src, toPath: tmp + "/chat.db" + suffix)
+                }
+            }
+            return tmp + "/chat.db"
+        }
+    }
+
+    // MARK: 写入（删除 / 恢复）
+
+    func writeConnection() throws -> SQLiteDB {
+        try SQLiteDB(path: activePath, readOnly: false)
+    }
+
+    func chatIDs(for ids: [Int64]) -> [Int64: [Int64]] {
+        var out: [Int64: [Int64]] = [:]
+        guard let db = try? SQLiteDB(path: activePath, readOnly: true) else { return out }
+        defer { db.close() }
+        guard db.hasTable("chat_message_join") else { return out }
+        let stmt = try? db.prepare("SELECT message_id, chat_id FROM chat_message_join")
+        guard let s = stmt else { return out }
+        defer { sqlite3_finalize(s) }
+        while sqlite3_step(s) == SQLITE_ROW {
+            let mid = sqlite3_column_int64(s, 0)
+            let cid = sqlite3_column_int64(s, 1)
+            out[mid, default: []].append(cid)
+        }
+        return out
+    }
+
+    /// 取指定消息的 attributedBody（正文只存在于二进制里的情况，还原时必须带上）
+    func attributedBodies(for ids: [Int64]) -> [Int64: Data] {
+        var out: [Int64: Data] = [:]
+        guard !ids.isEmpty,
+              let db = try? SQLiteDB(path: activePath, readOnly: true) else { return out }
+        defer { db.close() }
+        guard db.columns(of: "message").contains("attributedBody") else { return out }
+        for chunk in ids.chunked(400) {
+            let ph = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            guard let stmt = try? db.prepare(
+                "SELECT ROWID, attributedBody FROM message WHERE ROWID IN (\(ph))") else { continue }
+            defer { sqlite3_finalize(stmt) }
+            for (i, v) in chunk.enumerated() { sqlite3_bind_int64(stmt, Int32(i + 1), v) }
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                let rid = sqlite3_column_int64(stmt, 0)
+                if let blob = blobAt(stmt, 1) { out[rid] = blob }
+            }
+        }
+        return out
+    }
+
+    func totalCount() -> Int {
+        guard let db = try? SQLiteDB(path: activePath, readOnly: true) else { return 0 }
+        defer { db.close() }
+        guard let s = try? db.prepare("SELECT COUNT(1) FROM message") else { return 0 }
+        defer { sqlite3_finalize(s) }
+        return sqlite3_step(s) == SQLITE_ROW ? Int(sqlite3_column_int64(s, 0)) : 0
+    }
+
+    func sizeMB() -> Double {
+        let attrs = try? FileManager.default.attributesOfItem(atPath: activePath)
+        let bytes = (attrs?[.size] as? NSNumber)?.doubleValue ?? 0
+        return (bytes / 1_048_576 * 10).rounded() / 10
+    }
+
+    func switchToDemo() {
+        isDemo = true
+        activePath = Database.overridePath?.isEmpty == false
+            ? Database.overridePath! : DemoData.demoPath
+    }
+    func switchToReal() { isDemo = false; activePath = realPath }
+}
+
+// MARK: - 列值读取
+
+func textAt(_ stmt: OpaquePointer, _ idx: Int32) -> String? {
+    guard let c = sqlite3_column_text(stmt, idx) else { return nil }
+    return String(cString: c)
+}
+
+func blobAt(_ stmt: OpaquePointer, _ idx: Int32) -> Data? {
+    guard let bytes = sqlite3_column_blob(stmt, idx) else { return nil }
+    let len = Int(sqlite3_column_bytes(stmt, idx))
+    guard len > 0 else { return nil }
+    return Data(bytes: bytes, count: len)
+}
+
+// MARK: - Apple 时间戳
+
+enum AppleTime {
+    static let epoch: TimeInterval = 978307200  // 2001-01-01 UTC
+
+    static func toDate(_ raw: Int64) -> Date {
+        var v = Double(raw)
+        if v > 1e16 { v /= 1e9 }        // 纳秒
+        else if v > 1e13 { v /= 1e6 }   // 微秒
+        else if v > 1e11 { v /= 1e3 }   // 毫秒
+        return Date(timeIntervalSince1970: epoch + v)
+    }
+
+    static func fromDate(_ d: Date) -> Int64 {
+        Int64((d.timeIntervalSince1970 - epoch) * 1e9)
+    }
+}
+
+// MARK: - attributedBody 文本提取
+
+enum AttributedBody {
+    /// typedstream 二进制里抢救正文：定位 NSString 段，在结构尾 \x86\x84 处截断
+    static func extract(_ data: Data) -> String {
+        let bytes = [UInt8](data)
+        let markers: [[UInt8]] = [
+            Array("NSMutableString".utf8),
+            Array("NSString".utf8)
+        ]
+
+        for marker in markers {
+            guard let pos = find(bytes, marker) else { continue }
+            var i = pos + marker.count
+            // 找 '+' 作为内容起点标记
+            while i < bytes.count && bytes[i] != UInt8(ascii: "+") { i += 1 }
+            guard i < bytes.count else { continue }
+            i += 1
+            // 跳过 1~2 个不可打印的长度前缀
+            var skipped = 0
+            while i < bytes.count && skipped < 4 && bytes[i] < 0x20 { i += 1; skipped += 1 }
+            var end = bytes.count
+            // 结构尾标记
+            let tails: [[UInt8]] = [[0x86, 0x84], [0x86, 0x85]]
+            for tail in tails {
+                if let t = find(bytes, tail, from: i) { end = min(end, t) }
+            }
+            if let t = find(bytes, Array("NSObject".utf8), from: i) { end = min(end, t) }
+            if end > i {
+                let slice = Data(bytes[i..<end])
+                var s = String(decoding: slice, as: UTF8.self)
+                s = s.filter { ch in
+                    ch == "\u{FFFC}" || (ch.unicodeScalars.first?.value ?? 0) >= 0x20
+                }
+                s = s.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !s.isEmpty { return s }
+            }
+        }
+        return ""
+    }
+
+    private static func find(_ hay: [UInt8], _ needle: [UInt8], from: Int = 0) -> Int? {
+        guard !needle.isEmpty, hay.count >= needle.count else { return nil }
+        var i = from
+        while i <= hay.count - needle.count {
+            if hay[i] == needle[0] {
+                var ok = true
+                for j in 1..<needle.count where hay[i + j] != needle[j] { ok = false; break }
+                if ok { return i }
+            }
+            i += 1
+        }
+        return nil
+    }
+}

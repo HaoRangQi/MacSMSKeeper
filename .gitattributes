@@ -1,0 +1,10 @@
+# 统一换行符，避免跨平台 diff 噪音
+* text=auto eol=lf
+
+*.swift   text diff=swift
+*.md      text
+*.sh      text eol=lf
+Makefile  text
+
+*.png     binary
+*.icns    binary

@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><style>
+  html,body{margin:0;padding:0;background:transparent;}
+  svg{display:block;}
+</style></head>
+<body>
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#7c83f7"/>
+      <stop offset="55%" stop-color="#4f46e5"/>
+      <stop offset="100%" stop-color="#3730a3"/>
+    </linearGradient>
+    <linearGradient id="bubble" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#e8eaff"/>
+    </linearGradient>
+    <filter id="sh" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="14" stdDeviation="22" flood-color="#1e1b4b" flood-opacity=".28"/>
+    </filter>
+  </defs>
+
+  <g transform="translate(100,100) scale(0.805)">
+  <rect x="0" y="0" width="1024" height="1024" rx="228" fill="url(#bg)"/>
+  <rect x="0" y="0" width="1024" height="512" rx="228" fill="#ffffff" opacity=".05"/>
+
+  <g filter="url(#sh)">
+    <path d="M258 262h508c30 0 54 24 54 54v300c0 30-24 54-54 54H470l-128 106c-14 12-34 2-34-16v-90h-50c-30 0-54-24-54-54V316c0-30 24-54 54-54z"
+          fill="url(#bubble)"/>
+  </g>
+
+  <g fill="#4f46e5" opacity=".92">
+    <rect x="330" y="376" width="360" height="40" rx="20"/>
+    <rect x="330" y="456" width="256" height="40" rx="20"/>
+  </g>
+
+  <circle cx="716" cy="720" r="112" fill="#ffffff"/>
+  <circle cx="716" cy="720" r="88" fill="#dc2626"/>
+  <path d="M676 722l28 28 54-58" stroke="#ffffff" stroke-width="22"
+        stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  </g>
+</svg>
+</body></html>
