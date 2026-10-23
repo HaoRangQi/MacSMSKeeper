@@ -252,6 +252,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             state.selection = []
         }
 
+        // 自定义时间范围：验证 customFrom/customTo 真的接入了筛选
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        state.range = .custom
+        state.customFrom = cal.date(byAdding: .day, value: -30, to: today)!
+        state.customTo = today
+        state.refilter()
+        let custom30 = state.filtered.count
+        state.range = .d30
+        state.refilter()
+        let preset30 = state.filtered.count
+        Snapshot.log("[test] 自定义近30天 \(custom30) 条 vs 预设近30天 \(preset30) 条"
+                     + "（应相等或差 1 条边界）")
+
+        // 反向验证：把区间改成不可能有数据的远古年代，结果应为 0
+        state.range = .custom
+        state.customFrom = cal.date(byAdding: .year, value: -10, to: today)!
+        state.customTo = cal.date(byAdding: .year, value: -9, to: today)!
+        state.refilter()
+        let ancient = state.filtered.count
+        Snapshot.log("[test] 自定义 10 年前区间 -> \(ancient) 条（应为 0）")
+        state.range = .all
+        state.customFrom = today
+        state.customTo = today
+        state.refilter()
+
         // 破坏性测试：演示库，或 SMSKEEPER_DB 明确指定的测试库。
         // 判据是「当前库不是系统真实库」，绝不用真实短信做测试。
         let isRealDB = Database.shared.activePath == Database.shared.realPath

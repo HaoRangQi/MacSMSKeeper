@@ -315,6 +315,7 @@ final class AppState: ObservableObject {
     @Published var pendingDeleteIDs: Set<Int64>? = nil
     @Published var lastExportFormat: ExportFormat = .csv
     @Published var anchorID: Int64? = nil
+    @Published var showCustomRange = false
 
     /// 外观：主题 + 背景不透明度
     @Published var appearance: AppearanceMode = .system {

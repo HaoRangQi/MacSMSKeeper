@@ -100,26 +100,54 @@ struct MessageListView: View {
         }
     }
 
+    /// 工具栏上显示的时间范围文案。自定义时显示具体日期区间
+    private var rangeLabel: String {
+        switch state.range {
+        case .all: return L.t("时间")
+        case .custom:
+            return "\(Fmt.short.string(from: state.customFrom)) – \(Fmt.short.string(from: state.customTo))"
+        default: return state.range.label
+        }
+    }
+
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
         ToolbarItemGroup(placement: .automatic) {
+            // 时间范围。注意：DatePicker 不能放进 Menu —— macOS 会把菜单里的
+            // 日期选择器渲染成禁用状态（点了没反应）。所以"自定义…"走 popover。
             Menu {
-                Picker(L.t("时间范围"), selection: $state.range) {
-                    ForEach(TimeRange.allCases) { r in
-                        Text(r.label).tag(r)
+                ForEach(TimeRange.allCases) { r in
+                    if r == .custom {
+                        Divider()
+                        Button {
+                            state.range = .custom
+                            state.showCustomRange = true
+                        } label: {
+                            if state.range == .custom {
+                                Label(r.label, systemImage: "checkmark")
+                            } else {
+                                Text(r.label)
+                            }
+                        }
+                    } else {
+                        Button {
+                            state.range = r
+                            state.refilter()
+                        } label: {
+                            if state.range == r {
+                                Label(r.label, systemImage: "checkmark")
+                            } else {
+                                Text(r.label)
+                            }
+                        }
                     }
                 }
-                .pickerStyle(.inline)
-                if state.range == .custom {
-                    Divider()
-                    DatePicker(L.t("从"), selection: $state.customFrom, displayedComponents: .date)
-                    DatePicker(L.t("到"), selection: $state.customTo, displayedComponents: .date)
-                }
             } label: {
-                Label(state.range == .all ? L.t("时间") : state.range.label,
-                      systemImage: "calendar")
+                Label(rangeLabel, systemImage: "calendar")
             }
-            .onChange(of: state.range) { _, _ in state.refilter() }
+            .popover(isPresented: $state.showCustomRange) {
+                CustomRangePanel()
+            }
 
             Menu {
                 Picker(L.t("排序"), selection: $state.sort) {
@@ -443,5 +471,50 @@ struct CheckCircle: View {
         }
         .frame(width: 16, height: 16)
         .contentShape(Circle())
+    }
+}
+
+// MARK: - 自定义时间范围面板
+
+/// 独立 popover，不用 Menu —— 菜单里的 DatePicker 会被系统渲染成禁用状态。
+/// 日期改动即实时筛选（内存操作，9 千条实测毫秒级）。
+struct CustomRangePanel: View {
+    @EnvironmentObject var state: AppState
+    @Environment(\.dismiss) private var dismiss
+
+    private var invalid: Bool { state.customFrom > state.customTo }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(L.t("自定义时间范围"))
+                .font(.system(size: Typo.s(13), weight: .semibold))
+
+            DatePicker(L.t("从"), selection: $state.customFrom, displayedComponents: .date)
+            DatePicker(L.t("到"), selection: $state.customTo, displayedComponents: .date)
+
+            if invalid {
+                Label(L.t("开始日期晚于结束日期"), systemImage: "exclamationmark.triangle.fill")
+                    .font(.system(size: Typo.s(11)))
+                    .foregroundStyle(.orange)
+            }
+
+            HStack(spacing: 8) {
+                Button(L.t("最近一年")) {
+                    state.range = .d365
+                    dismiss()
+                }
+                .controlSize(.small)
+
+                Spacer()
+
+                Button(L.t("完成")) { dismiss() }
+                    .keyboardShortcut(.defaultAction)
+                    .controlSize(.small)
+            }
+        }
+        .padding(16)
+        .frame(width: 300)
+        .onChange(of: state.customFrom) { _, _ in state.refilter() }
+        .onChange(of: state.customTo) { _, _ in state.refilter() }
     }
 }

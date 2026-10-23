@@ -294,7 +294,6 @@ enum L {
         "发件人": "Sender",
         "分类": "Category",
         "验证码：%@": "Code: %@",
-        "时间范围": "Time Range",
         "从": "From",
         "到": "To",
         "主题": "Theme",
@@ -334,5 +333,9 @@ enum L {
         "这是「信息」App 的私有数据库函数缺失，通常是系统版本变化导致的。数据未受影响。请到「设置与诊断 › 诊断日志」打开开关，重现一次操作，把日志文件发给开发者即可定位。": "A private Messages database function is missing, usually after a macOS update. Your data is unaffected. Enable Diagnostics Log in Settings, reproduce the issue, and send the log file to the developer.",
         "数据库被占用。请确认「信息」App 已完全退出后重试。": "Database is locked. Make sure the Messages app has fully quit, then retry.",
         "数据库只读。请检查「设置与诊断」中的权限状态。": "Database is read-only. Check the permission status in Settings & Diagnostics.",
+        "自定义时间范围": "Custom Range",
+        "开始日期晚于结束日期": "Start date is after end date",
+        "完成": "Done",
+        "最近一年": "Last Year",
     ]
 }
