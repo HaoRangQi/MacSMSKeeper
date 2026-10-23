@@ -305,26 +305,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Snapshot.log("[test] 指定测试库：允许执行删除/还原闭环")
         }
 
-        // 专项：空会话清理。chat 900 只关联 ROWID=1 一条消息，
-        // 删掉它之后 chat 900 应该被清除，而 chat 901 还有消息、必须保留。
+        // 专项：消息与会话一起删、一起恢复。
+        // 测试库约定：chat900 只关联 ROWID=1，chat901 只关联 ROWID=2，
+        // chat902 关联 5 条（ROWID 31-35）。删除 ROWID 1、2 之后：
+        //   900 / 901 一条不剩 -> 会话应被清掉，还原后应回来
+        //   902 还有消息      -> 会话必须保留
         let hasChatTable = Database.shared.activePath != Database.shared.realPath
             && Self.tableExists("chat")
-        if hasChatTable, state.all.contains(where: { $0.id == 1 }) {
-            let c900 = Self.scalar("SELECT COUNT(*) FROM chat WHERE ROWID = 900") ?? -1
-            let c901 = Self.scalar("SELECT COUNT(*) FROM chat WHERE ROWID = 901") ?? -1
-            let ok = await state.delete(ids: [1], source: "test")
-            let c900after = Self.scalar("SELECT COUNT(*) FROM chat WHERE ROWID = 900") ?? -1
-            let c901after = Self.scalar("SELECT COUNT(*) FROM chat WHERE ROWID = 901") ?? -1
+        if hasChatTable, state.all.contains(where: { $0.id == 1 }),
+           state.all.contains(where: { $0.id == 2 }) {
+            func cnt(_ sql: String) -> Int { Self.scalar(sql) ?? -1 }
+            let a0 = cnt("SELECT COUNT(*) FROM chat WHERE ROWID = 900")
+            let b0 = cnt("SELECT COUNT(*) FROM chat WHERE ROWID = 901")
+            let c0 = cnt("SELECT COUNT(*) FROM chat WHERE ROWID = 902")
 
-            // 立刻还原这个批次，验证会话能被找回来（闭环）
-            var c900back = -1
-            if let batch = state.trash.first(where: { $0.count == 1 && $0.source == "test" }) {
+            let ok = await state.delete(ids: [1, 2], source: "test")
+
+            let a1 = cnt("SELECT COUNT(*) FROM chat WHERE ROWID = 900")
+            let b1 = cnt("SELECT COUNT(*) FROM chat WHERE ROWID = 901")
+            let c1 = cnt("SELECT COUNT(*) FROM chat WHERE ROWID = 902")
+
+            // 立刻还原，验证会话一起回来
+            var a2 = -1, b2 = -1
+            if let batch = state.trash.first(where: { $0.count == 2 && $0.source == "test" }) {
                 _ = await state.restore(batch)
-                c900back = Self.scalar("SELECT COUNT(*) FROM chat WHERE ROWID = 900") ?? -1
+                a2 = cnt("SELECT COUNT(*) FROM chat WHERE ROWID = 900")
+                b2 = cnt("SELECT COUNT(*) FROM chat WHERE ROWID = 901")
             }
-            Snapshot.log("[test] 空会话清理：删除 ROWID=1 -> ok=\(ok)  "
-                         + "chat900 \(c900)->\(c900after)->还原后\(c900back)（应 1->0->1）  "
-                         + "chat901 \(c901)->\(c901after)（应 1->1）")
+            Snapshot.log("[test] 消息+会话一起删：删 ROWID 1,2 -> ok=\(ok)")
+            Snapshot.log("[test]   chat900（删光） \(a0)->\(a1)->还原后\(a2)  应 1->0->1")
+            Snapshot.log("[test]   chat901（删光） \(b0)->\(b1)->还原后\(b2)  应 1->0->1")
+            Snapshot.log("[test]   chat902（删一部分）\(c0)->\(c1)  应 1->1（保留）")
         }
 
         let before = state.all.count
