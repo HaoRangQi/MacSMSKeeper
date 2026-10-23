@@ -104,9 +104,22 @@ filter ~20 ms, category switch 0–8 ms, search ~25 ms.
 
 ## Privacy
 
-Everything runs locally. No network, no uploads. Only the copy is read; the original
-database is written to only when you delete. Backups and trash live in
+Everything runs locally. No network, no uploads. The system database is written to
+only when you delete. Backups and trash live in
 `~/Library/Application Support/SMSKeeper/`.
+
+Deleting is wrapped in several layers of protection: Messages is quit first, a full
+database snapshot is taken, deleted rows (including emptied conversations) are
+archived to Trash, everything runs in one transaction with rollback on failure, and
+the row count is read back afterwards to confirm the delete actually landed.
+
+Messages and conversations are handled together: when a conversation runs out of
+messages, its `chat` row is removed too, so no blank conversations are left behind;
+both are restored together.
+
+> If **iCloud Messages sync** is on, a local delete may be pulled back from iCloud
+> the next time Messages launches. Watch the "Deleted N · M remaining" toast — if
+> the number does not add up, the data was written back.
 
 ## License
 

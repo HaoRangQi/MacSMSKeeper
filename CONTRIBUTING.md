@@ -34,6 +34,18 @@ make selftest              # 必须输出「结论 通过」
 
 - **不要用 `@State`**：本机 Command Line Tools 缺少 SwiftUI 宏插件，`@State` 无法展开。
   局部状态请用 `ObservableObject` + `@StateObject`。
+- **`L.t()` 的参数必须是单个完整字符串字面量**，不能用 `+` 拼接。拼接会让
+  `check-localization.py` 抓到不完整 key、运行时查不到词条，英文模式回落中文。
+- **`DatePicker` 不能放进 `Menu`**：macOS 会把菜单内的日期控件渲染成禁用状态，
+  要用独立 `.popover`。
+- **`ImageRenderer` 渲染不了 AppKit 控件**（`NSTableView`、`DatePicker` 的
+  `nsImage` 会挂起），这类视图用自检逻辑验证，别写离屏渲染代码。
+- **回收站批次 ID 必须带毫秒 + 序号**：秒级精度会让同一秒内的连续删除互相覆盖
+  存档文件。批次文件要在删除提交并读回校验**之后**再写，否则事务内才收集得到的
+  数据（如被清空的会话行）会漏存。
+- **写 `chat.db` 前必须退出「信息」App**（`terminate()` 后轮询确认），并先整库备份。
+  库内触发器会调用「信息」App 注册的私有 SQL 函数，命名没有规律，
+  靠扫描 `sqlite_master` + `SELECT name()` 探测补齐，不要硬编码函数名。
 - 界面文案统一走 `L.t("中文")`，并在 `Sources/Models/Localization.swift` 补英文词条。
 - **词条 key 不能重复**：Swift 会把大字典字面量优化成 `uniqueKeysWithValues`，
   重复 key 会在运行时 `fatalError`。加词条后请检查重复。
