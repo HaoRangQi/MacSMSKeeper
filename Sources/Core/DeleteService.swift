@@ -214,6 +214,7 @@ final class DeleteService {
         var deleted: Int
         var backupName: String
         var batchID: String
+        var remaining: Int = 0      // 删除后读回的库内实际条数
     }
 
     func delete(messages: [SMSMessage], source: String,
@@ -239,6 +240,13 @@ final class DeleteService {
 
         let backup = try createBackup(tag: "before-delete")
         Log.event("delete.backup", "name", backup.name, "mb", "\(backup.sizeMB)")
+
+        // 删除前的库内条数，供删除后校验用
+        let beforeCount: Int = {
+            guard let db = try? Database.shared.writeConnection() else { return -1 }
+            defer { db.close() }
+            return db.scalarInt("SELECT COUNT(*) FROM message") ?? -1
+        }()
         let ids = messages.map(\.id)
 
         // 先把原始行写入回收站
@@ -315,7 +323,29 @@ final class DeleteService {
         db.close()
         Log.event("delete.done", "deleted", "\(deleted)", "backup", backup.name)
 
-        return DeleteResult(deleted: deleted, backupName: backup.name, batchID: batchID)
+        // 读回校验：确认库内条数真的减少了。
+        // 防止"界面显示成功但库里没变"的情况（例如被外部进程回写）。
+        let remaining: Int = {
+            guard let db = try? Database.shared.writeConnection() else { return -1 }
+            defer { db.close() }
+            return db.scalarInt("SELECT COUNT(*) FROM message") ?? -1
+        }()
+        let expected = beforeCount >= 0 ? beforeCount - deleted : -1
+        Log.event("delete.verify", "expected", "\(expected)", "actual", "\(remaining)",
+                  "before", "\(beforeCount)")
+        if expected >= 0, remaining >= 0, remaining != expected {
+            Log.error("delete.verify_failed", code: 3,
+                      msg: "删除后库内条数与预期不符",
+                      extra: ["expected": "\(expected)", "actual": "\(remaining)"])
+            throw NSError(domain: "SMSKeeper", code: 3, userInfo: [
+                NSLocalizedDescriptionKey: String(
+                    format: L.t("删除后校验失败：预期剩余 %d 条，实际 %d 条。可能有其它程序（如 iCloud 同步）把数据写回了。"),
+                    expected, remaining)
+            ])
+        }
+
+        return DeleteResult(deleted: deleted, backupName: backup.name,
+                            batchID: batchID, remaining: remaining)
     }
 
     // MARK: 回收站

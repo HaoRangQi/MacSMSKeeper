@@ -337,5 +337,7 @@ enum L {
         "开始日期晚于结束日期": "Start date is after end date",
         "完成": "Done",
         "最近一年": "Last Year",
+        "已删除 %d 条 · 库内剩余 %d 条": "Deleted %d · %d remaining in database",
+        "删除后校验失败：预期剩余 %d 条，实际 %d 条。可能有其它程序（如 iCloud 同步）把数据写回了。": "Post-delete check failed: expected %d remaining, found %d. Another process (e.g. iCloud sync) may have written the data back.",
     ]
 }

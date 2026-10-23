@@ -175,6 +175,14 @@ final class SQLiteDB {
         }
         return registered
     }
+    /// 执行一条返回单行单列的整数 SQL
+    func scalarInt(_ sql: String) -> Int? {
+        guard let stmt = try? prepare(sql) else { return nil }
+        defer { sqlite3_finalize(stmt) }
+        guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
+        return Int(sqlite3_column_int64(stmt, 0))
+    }
+
     /// SQLite 的原始错误文本（比「删除消息失败」有用得多）
     func lastError() -> String {
         guard let h = handle else { return "连接已关闭" }

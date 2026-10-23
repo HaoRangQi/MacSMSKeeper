@@ -352,6 +352,9 @@ final class AppState: ObservableObject {
             refreshTrash()
             refreshBackups()
             lastDeleteInfo = L.t("已删除 %d 条，备份 %@", res.deleted, res.backupName)
+            if res.remaining >= 0 {
+                lastDeleteInfo = L.t("已删除 %d 条 · 库内剩余 %d 条", res.deleted, res.remaining)
+            }
             toast = lastDeleteInfo
             return true
         } catch {
