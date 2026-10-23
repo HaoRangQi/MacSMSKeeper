@@ -172,6 +172,25 @@ make clean       # 清理构建产物
 
 ## 发版
 
+### 前置条件（换新机器时看这里）
+
+`scripts/release.sh` 会在开跑前自动检查下面这些，缺什么会直接告诉你，不会跑到一半才失败：
+
+| 要求 | 说明 |
+|---|---|
+| macOS 26+ | 项目用到 Liquid Glass，`xcrun --show-sdk-version` 必须 ≥ 26 |
+| Command Line Tools | 提供 `make` / `python3` / `swiftc` / `xcrun`。没有就跑 `xcode-select --install` |
+| 工作区干净 | `git status` 不能有未提交改动 |
+| 版本号未被占用 | tag `v<版本号>` 不存在 |
+| 本地化词条完整 | `python3 scripts/check-localization.py` 通过 |
+| GitHub 凭据 | 见下 |
+
+**GitHub 凭据**三种方式任选其一：
+
+1. 在终端执行一次 `git push`，按提示登录（macOS 会把凭据存进 Keychain，之后发版自动取用）
+2. `export GITHUB_TOKEN=<Personal Access Token>`（需要 `repo` 权限）
+3. 装 GitHub CLI：`gh auth login`，然后 `export GITHUB_TOKEN=$GH_TOKEN`
+
 ### 方式一：本地一键发版（现在就能用）
 
 在一台 macOS 26+ 的 Mac 上：
@@ -180,8 +199,8 @@ make clean       # 清理构建产物
 ./scripts/release.sh 1.1.0
 ```
 
-依次完成：本地化检查 → 自检 → 打包 → 打 tag 推送代码 → 创建 Release 上传安装包。
-不需要安装 `gh`，凭据从系统 Keychain 取。
+依次完成：工具链检查 → 本地化检查 → 凭据检查 → 自检 → 打包 → 打 tag 推送代码 → 创建 Release 上传安装包。
+不需要安装 `gh`。
 
 ### 方式二：CI 自动发版
 

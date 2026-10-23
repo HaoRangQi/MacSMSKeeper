@@ -21,6 +21,29 @@ TAG="v$VERSION"
 ZIP="$ROOT/dist/${PRODUCT}-v${VERSION}-macos26.zip"
 NOTES="$(mktemp)"; trap 'rm -f "$NOTES"' EXIT
 
+# ------------------------------------------------- 0. 换机器也能一次跑通的前置检查
+say "检查工具链"
+require() {
+    command -v "$1" >/dev/null 2>&1 && return 0
+    shift
+    die "缺少命令 $1" "${2:-安装 Command Line Tools：xcode-select --install}"
+}
+require git git "macOS 自带"
+require make make "安装 Command Line Tools：xcode-select --install"
+require python3 python3 "安装 Command Line Tools：xcode-select --install"
+require xcrun xcrun "安装 Command Line Tools：xcode-select --install"
+require swiftc swiftc "安装 Command Line Tools：xcode-select --install"
+require ditto ditto "macOS 自带"
+
+SDK_VER="$(xcrun --show-sdk-version 2>/dev/null || echo 0)"
+SDK_MAJOR="${SDK_VER%%.*}"
+if [ "${SDK_MAJOR:-0}" -lt 26 ]; then
+    # 注意用 ${SDK_VER} 花括号形式：$SDK_VER， 里的全角逗号会被 bash
+    # 当作变量名的一部分，导致 "unbound variable"
+    die "当前 macOS SDK 为 ${SDK_VER}，本项目要求 26+（用到 Liquid Glass）。请先升级系统。"
+fi
+printf "    macOS SDK %s · 工具链就绪\n" "$SDK_VER"
+
 # ---------------------------------------------------------------- 1. 前置检查
 say "检查工作区"
 [ -z "$(git status --porcelain)" ] || die "有未提交改动，先 commit 再发版"
@@ -33,6 +56,10 @@ git rev-parse -q --verify "refs/tags/$TAG" >/dev/null \
 say "本地化检查"
 python3 scripts/check-localization.py
 
+# 先验证凭据再花几分钟构建，失败要早失败
+say "检查 GitHub 凭据"
+python3 scripts/gh-release.py --check
+
 # ---------------------------------------------------------------- 2. 构建
 say "自检"
 make selftest
@@ -43,9 +70,9 @@ make dist VERSION="$VERSION"
 
 # ---------------------------------------------------------------- 3. 推送代码与 tag
 say "推送代码与 tag"
-git push origin "$BRANCH"
+git push origin "$BRANCH" 2>&1 || die "推送代码失败。新机器上第一次推送需要登录：按提示输入 GitHub 用户名和 Personal Access Token（需要 repo 权限）"
 git tag -a "$TAG" -m "$PRODUCT $VERSION"
-git push origin "$TAG"
+git push origin "$TAG" 2>&1 || die "推送 tag 失败，请检查网络与凭据"
 
 # ---------------------------------------------------------------- 4. 发布
 say "创建 Release 并上传附件"

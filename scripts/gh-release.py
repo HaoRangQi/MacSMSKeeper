@@ -26,14 +26,25 @@ def token() -> str:
     t = os.environ.get("GITHUB_TOKEN")
     if t:
         return t.strip()
-    out = subprocess.run(
-        ["git", "credential", "fill"],
-        input="protocol=https\nhost=github.com\n\n",
-        capture_output=True, text=True,
-    ).stdout
-    m = re.search(r"^password=(.*)$", out, re.M)
+    # GIT_TERMINAL_PROMPT=0 是关键：否则取不到凭据时 git 会挂住等交互输入
+    # （实测会卡在 "Username for 'https://github.com':" 直到超时）。
+    env = dict(os.environ, GIT_TERMINAL_PROMPT="0")
+    try:
+        proc = subprocess.run(
+            ["git", "credential", "fill"],
+            input="protocol=https\nhost=github.com\n\n",
+            capture_output=True, text=True, env=env, timeout=30,
+        )
+    except subprocess.TimeoutExpired:
+        sys.exit("error: git credential 超时（30s）")
+    m = re.search(r"^password=(.*)$", proc.stdout, re.M)
     if not m:
-        sys.exit("error: 取不到 GitHub 凭据（试过 GITHUB_TOKEN 与 git credential）")
+        sys.exit(
+            "error: 取不到 GitHub 凭据。三种方式任选其一：\n"
+            "  1. 在终端执行一次 git push，按提示登录（macOS 会把凭据存进 Keychain）\n"
+            "  2. export GITHUB_TOKEN=<Personal Access Token>（需要 repo 权限）\n"
+            "  3. 装 GitHub CLI：gh auth login，然后 export GITHUB_TOKEN=$GH_TOKEN"
+        )
     return m.group(1).strip()
 
 
@@ -61,6 +72,17 @@ def request(method: str, url: str, tok: str, **kw):
 
 
 def main() -> int:
+    # --check：只验证凭据和仓库可达性，不做任何写操作（供 release.sh 前置检查）
+    if "--check" in sys.argv:
+        tok = token()
+        slug = repo()
+        status, _ = request("GET", f"{API}/repos/{slug}", tok)
+        if status != 200:
+            print(f"error: 无法访问 {slug}（HTTP {status}）")
+            return 1
+        print(f"OK：凭据可用，可访问 {slug}")
+        return 0
+
     if len(sys.argv) < 5:
         print(__doc__)
         return 2
